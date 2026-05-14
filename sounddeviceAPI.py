@@ -1,8 +1,9 @@
 import sounddevice as sd
 import numpy as np
+from constants import SAMPLE_RATE, WINDOW_SECONDS
 
 class SoundAPI:
-    def __init__(self, sr=22050, duration=1.0):
+    def __init__(self, sr=SAMPLE_RATE, duration=WINDOW_SECONDS):
         self.sr = sr
         self.duration = duration
 

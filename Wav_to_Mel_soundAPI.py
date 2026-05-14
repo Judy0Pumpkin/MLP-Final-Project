@@ -2,7 +2,9 @@ import numpy as np
 import librosa
 import torch
 
-def audio_to_mel(y, sr=22050, n_mels=128, fixed_frames=1024):
+from constants import FIXED_FRAMES, SAMPLE_RATE, N_MELS, HOP_LENGTH, N_FFT, F_MIN, F_MAX, FIXED_FRAMES
+
+def audio_to_mel(y, sr=SAMPLE_RATE, n_mels=N_MELS, fixed_frames=FIXED_FRAMES):
 
     mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=n_mels) #把原始音訊轉成Mel spectrogram
     mel = librosa.power_to_db(mel, ref=np.max) #分貝db
