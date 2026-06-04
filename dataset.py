@@ -16,6 +16,12 @@ from constants import (
 BEAT_SIGMA   = 1.5   # Gaussian smoothing for beat labels (frames)
 N_TEMPO_BINS = 300   # log-spaced BPM classification bins
 
+# Slow-stretch augmentation：對 BPM > SLOW_AUG_MIN_BPM 的訓練歌曲加一個放慢版本
+# 補充 30-100 BPM 範圍的稀少資料
+# 需要先在 Windows 設定 NUMBA_DISABLE_SVML=1 環境變數才能使用
+SLOW_AUG_RATE    = 0.75   # time_stretch rate（< 1 = 放慢）
+SLOW_AUG_MIN_BPM = 100    # 只對 > 100 BPM 的歌做放慢，避免重複已有的慢速資料
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -67,8 +73,8 @@ def bpm_to_bin(bpm):
     return int(np.clip(log_ratio * (N_TEMPO_BINS - 1), 0, N_TEMPO_BINS - 1))
 
 
-def compute_mel(audio_path):
-    """Load WAV 或 MP3，轉換成 power-dB mel spectrogram。
+def compute_mel(audio_path, stretch_rate=1.0):
+    """Load WAV 或 MP3，可選做 time stretch，轉換成 power-dB mel spectrogram。
     回傳 shape (N_MELS, T) float32。
 
     mel 的結構類似於一個 2D 表格：
@@ -76,11 +82,13 @@ def compute_mel(audio_path):
         欄 = T 個時間 frame，每 frame ≈ hop_length/sr ≈ 23ms
         數值 = 該頻率在該時間的能量 (dB)
 
-            t=0    t=1    t=2 ...
-    bin 0  [-10.2,  -8.5,  -5.1 ...]  ← 低頻（鼓/低音）
-    bin 127 [-60.0, -59.8, -60.0 ...]  ← 高頻（通常很弱）
+    Args:
+        stretch_rate: 1.0 = 原速；0.75 = 放慢到 75%（beat timestamps 需除以 0.75）
+                      需要 NUMBA_DISABLE_SVML=1 才能在 Windows 上使用 stretch
     """
     y, _ = librosa.load(str(audio_path), sr=SAMPLE_RATE, mono=True)
+    if stretch_rate != 1.0:
+        y = librosa.effects.time_stretch(y, rate=stretch_rate)
     mel = librosa.feature.melspectrogram(
         y=y, sr=SAMPLE_RATE, n_fft=N_FFT, hop_length=HOP_LENGTH,
         n_mels=N_MELS, fmin=F_MIN, fmax=F_MAX,
@@ -222,6 +230,7 @@ class BeatDataset(Dataset):
         self._beat_acts  = []
         self._tempo_bins = []
 
+        n_augmented = 0
         for wav_path, beats_path in self.pairs:
             try:
                 mel = self._get_mel(wav_path)
@@ -244,6 +253,25 @@ class BeatDataset(Dataset):
             self._beat_acts.append(beat_act)
             self._tempo_bins.append(bpm_to_bin(bpm))
 
+            # ── Slow-stretch augmentation（僅 train split） ──────────────────
+            # 對 BPM > 100 的歌加一個 0.75x 慢速版本（結果 BPM ≈ 原來 × 0.75）
+            # beat timestamps 除以 stretch_rate（放慢後 beat 出現得更晚）
+            if split == 'train' and bpm > SLOW_AUG_MIN_BPM:
+                try:
+                    mel_slow    = self._get_mel(wav_path, SLOW_AUG_RATE)
+                    ts_slow     = timestamps / SLOW_AUG_RATE
+                    act_slow    = make_beat_activation(ts_slow, mel_slow.shape[1])
+                    bpm_slow    = float(np.clip(bpm * SLOW_AUG_RATE, TEMPO_MIN, TEMPO_MAX))
+                    self._mels.append(mel_slow)
+                    self._beat_acts.append(act_slow)
+                    self._tempo_bins.append(bpm_to_bin(bpm_slow))
+                    n_augmented += 1
+                except Exception as e:
+                    print(f"  [stretch 跳過] {wav_path.name} — {e}")
+
+        if n_augmented:
+            print(f"  slow-stretch augmented: {n_augmented} songs added")
+
         # ── 製作 Sliding Window Index ─────────────────────────────────────────
         # 每首歌切出多個 context_frames 長的 window，window 之間間隔 stride
         self.windows = []
@@ -258,16 +286,23 @@ class BeatDataset(Dataset):
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
-    def _get_mel(self, audio_path):
-        """Cache-aware mel loader：有 .npy 快取就直接讀，否則算完再存。"""
+    def _get_mel(self, audio_path, stretch_rate=1.0):
+        """Cache-aware mel loader：有 .npy 快取就直接讀，否則算完再存。
+        rate=1.0 → stem.npy；rate=0.75 → stem_s075.npy
+        """
         if self.cache_dir is not None:
-            cache_file = self.cache_dir / (Path(audio_path).stem + '.npy')
+            if stretch_rate == 1.0:
+                cache_file = self.cache_dir / (Path(audio_path).stem + '.npy')
+            else:
+                tag        = f"s{int(stretch_rate * 100):03d}"
+                cache_file = self.cache_dir / f"{Path(audio_path).stem}_{tag}.npy"
+
             if cache_file.exists():
                 return np.load(cache_file)
-            mel = compute_mel(audio_path)
+            mel = compute_mel(audio_path, stretch_rate)
             np.save(cache_file, mel)
             return mel
-        return compute_mel(audio_path)
+        return compute_mel(audio_path, stretch_rate)
 
     # ── PyTorch API ───────────────────────────────────────────────────────────
 
