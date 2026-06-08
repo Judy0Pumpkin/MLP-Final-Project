@@ -16,7 +16,7 @@ BATCH_SIZE      = 32
 LR              = 1e-3
 WEIGHT_DECAY    = 1e-4    # L2 regularisation
 NUM_EPOCHS      = 100
-EARLY_STOP      = 15      # stop if val F-measure doesn't improve for N epochs
+EARLY_STOP      = 20      # stop if val F-measure doesn't improve for N epochs
 BEAT_POS_WEIGHT = 5.0     # up-weight beat frames
 TEMPO_LOSS_W    = 0.0     # disabled: tempo task dilutes beat gradients on diverse datasets
 GRAD_CLIP       = 1.0
@@ -126,13 +126,13 @@ def train():
     # ── Optimiser & scheduler ────────────────────────────────────────────────
     optimiser = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimiser, mode='max', factor=0.5, patience=5
+        optimiser, mode='max', factor=0.5, patience=10
     )
 
     # ── Resume from checkpoint if available ──────────────────────────────────
     ckpt_dir   = Path('checkpoints')
     ckpt_dir.mkdir(exist_ok=True)
-    ckpt_file  = ckpt_dir / 'best_model.pt'
+    ckpt_file  = ckpt_dir / 'best_model_retrain_with_stretched.pt'
     best_val_f = 0.0
     start_epoch = 1
     no_improve = 0
@@ -142,8 +142,8 @@ def train():
         model.load_state_dict(ckpt['model_state'])
         best_val_f  = ckpt['val_f']       # 恢復基準
         start_epoch = ckpt['epoch'] + 1   # 從下一個 epoch 繼續
-        print(f"Loaded weights from epoch {ckpt['epoch']} "
-              f"(old val_F={ckpt['val_f']:.4f}, restarting counters)\n")
+        print(f"Resumed from epoch {ckpt['epoch']} "
+              f"(best val_F={best_val_f:.4f}, continuing from epoch {start_epoch})\n")
 
     print(f"{'Epoch':>5}  {'train_loss':>10}  {'val_loss':>8}  {'val_F':>6}  {'lr':>8}  {'time':>5}")
     print("-" * 60)
@@ -183,7 +183,7 @@ def train():
                 'epoch'      : epoch,
                 'model_state': model.state_dict(),
                 'val_f'      : val_f,
-            }, ckpt_dir / 'best_model.pt')
+            }, ckpt_dir / 'best_model_retrain_with_stretched.pt')
             print(f"  → best model saved  (val_F={val_f:.4f})")
         else:
             no_improve += 1
@@ -193,7 +193,7 @@ def train():
                 break
 
     print(f"\nDone. Best val F-measure : {best_val_f:.4f}")
-    print(f"Checkpoint : {ckpt_dir / 'best_model.pt'}")
+    print(f"Checkpoint : {ckpt_dir / 'best_model_retrain_with_stretched.pt'}")
 
 
 if __name__ == '__main__':
