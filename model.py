@@ -57,9 +57,9 @@ class BeatTCN(nn.Module):
     # TCN hyper-parameters
     TCN_CHANNELS  = 64
     TCN_KERNEL    = 3
-    TCN_DILATIONS = [1, 2, 4, 8, 16, 32]   # receptive field ≈ 4*(1+2+…+32)*2 = 252 frames
+    TCN_DILATIONS = [1, 2, 4, 8, 16, 32, 1, 2, 4, 8, 16, 32]   # receptive field ≈ 4*(1+2+…+32)*2 = 252 frames
 
-    def __init__(self, n_mels=N_MELS, n_tempo_bins=N_TEMPO_BINS, dropout=0.3):
+    def __init__(self, n_mels=N_MELS, n_tempo_bins=N_TEMPO_BINS, dropout=0.1):
         super().__init__()
         assert n_mels == 128, "CNN is designed for N_MELS=128"
 
@@ -87,14 +87,13 @@ class BeatTCN(nn.Module):
         )
 
         # ── TCN ─────────────────────────────────────────
-        self.tcn = nn.Sequential(*[
+        self.tcn_blocks = nn.ModuleList([
             TCNBlock(self.TCN_CHANNELS, self.TCN_KERNEL, dilation=d, dropout=dropout)
-            for d in self.TCN_DILATIONS
-        ])
+            for d in self.TCN_DILATIONS])
 
         # ── Beat head: frame-level activation ────────────────────────────────
         self.beat_head = nn.Conv1d(self.TCN_CHANNELS, 1, kernel_size=1)
-
+        self.downbeat_head = nn.Conv1d(self.TCN_CHANNELS, 1, kernel_size=1)
         # ── Tempo head: global BPM classification ────────────────────────────
         self.tempo_head = nn.Sequential(
             nn.AdaptiveAvgPool1d(1),      # (B, 64, 1)
@@ -103,17 +102,17 @@ class BeatTCN(nn.Module):
         )
 
     def forward(self, x):
-        """
-        x: (B, 1, N_MELS, T)
-        """
-        feat = self.cnn(x)              # (B, 64, 1, T)
-        feat = feat.squeeze(2)          # (B, 64, T)
-        feat = self.tcn(feat)           # (B, 64, T)
-
-        beat_act     = torch.sigmoid(self.beat_head(feat)).squeeze(1)  # (B, T)
-        tempo_logits = self.tempo_head(feat)                            # (B, N_TEMPO_BINS)
-
-        return beat_act, tempo_logits
+        feat = self.cnn(x).squeeze(2)   # (B, 64, T)
+    
+        skip_sum = torch.zeros_like(feat)
+        for block in self.tcn_blocks:
+            feat = block(feat)
+            skip_sum = skip_sum + feat  # 累加每層輸出（skip aggregation）
+    
+        beat_act      = torch.sigmoid(self.beat_head(feat)).squeeze(1)
+        downbeat_act  = torch.sigmoid(self.downbeat_head(feat)).squeeze(1)
+        tempo_logits  = self.tempo_head(skip_sum)
+        return beat_act, downbeat_act, tempo_logits
 
 
 # ── Smoke-test ───────────────────────────────────────────────────────────────

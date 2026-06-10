@@ -71,7 +71,15 @@ def bpm_to_bin(bpm):
     bpm = np.clip(float(bpm), TEMPO_MIN, TEMPO_MAX)
     log_ratio = np.log(bpm / TEMPO_MIN) / np.log(TEMPO_MAX / TEMPO_MIN)
     return int(np.clip(log_ratio * (N_TEMPO_BINS - 1), 0, N_TEMPO_BINS - 1))
-
+##Böck 2020用的是雙峰目標：主要 BPM 給 1.0，倍速/半速給 0.5）
+def bpm_to_tempo_target(bpm):
+    """回傳 soft tempo target，主BPM=1.0，倍速/半速=0.5"""
+    target = np.zeros(N_TEMPO_BINS, dtype=np.float32)
+    for weight, b in [(1.0, bpm), (0.5, bpm*2), (0.5, bpm/2)]:
+        b = np.clip(b, TEMPO_MIN, TEMPO_MAX)
+        idx = bpm_to_bin(b)
+        target[idx] = max(target[idx], weight)
+    return target
 
 def compute_mel(audio_path, stretch_rate=1.0):
     """Load WAV 或 MP3，可選做 time stretch，轉換成 power-dB mel spectrogram。
@@ -193,6 +201,7 @@ class BeatDataset(Dataset):
         seed           = 42,
         cache_dir      = None,
     ):
+        self.split          = split
         self.context_frames = context_frames
         self.stride         = stride if stride is not None else context_frames // 2
         self.cache_dir      = Path(cache_dir) if cache_dir else None
@@ -225,11 +234,12 @@ class BeatDataset(Dataset):
 
         # ── 載入所有音訊 + 製作 labels ────────────────────────────────────────
         print(f"[BeatDataset] loading {split} split ({len(self.pairs)} songs) …")
-
+        self._bpms       = []
         self._mels       = []
         self._beat_acts  = []
         self._tempo_bins = []
-
+        self._downbeat_acts = []
+    
         n_augmented = 0
         for wav_path, beats_path in self.pairs:
             try:
@@ -239,7 +249,7 @@ class BeatDataset(Dataset):
                 continue
             n_frames = mel.shape[1]
 
-            timestamps, _ = parse_beats(beats_path)
+            timestamps, positions = parse_beats(beats_path)
             beat_act = make_beat_activation(timestamps, n_frames)
 
             if len(timestamps) >= 2:
@@ -252,7 +262,11 @@ class BeatDataset(Dataset):
             self._mels.append(mel)
             self._beat_acts.append(beat_act)
             self._tempo_bins.append(bpm_to_bin(bpm))
-
+            self._bpms.append(bpm)
+            # downbeat = position == 1 的拍點
+            downbeat_times = timestamps[positions == 1]
+            downbeat_act = make_beat_activation(downbeat_times, n_frames, sigma=BEAT_SIGMA)
+            self._downbeat_acts.append(downbeat_act)
             # ── Slow-stretch augmentation（僅 train split） ──────────────────
             # 對 BPM > 100 的歌加一個 0.75x 慢速版本（結果 BPM ≈ 原來 × 0.75）
             # beat timestamps 除以 stretch_rate（放慢後 beat 出現得更晚）
@@ -265,7 +279,11 @@ class BeatDataset(Dataset):
                     self._mels.append(mel_slow)
                     self._beat_acts.append(act_slow)
                     self._tempo_bins.append(bpm_to_bin(bpm_slow))
+                    self._bpms.append(bpm_slow)
                     n_augmented += 1
+                    ts_downbeat_slow = timestamps[positions == 1] / SLOW_AUG_RATE
+                    act_downbeat_slow = make_beat_activation(ts_downbeat_slow, mel_slow.shape[1])
+                    self._downbeat_acts.append(act_downbeat_slow)
                 except Exception as e:
                     print(f"  [stretch 跳過] {wav_path.name} — {e}")
 
@@ -316,7 +334,21 @@ class BeatDataset(Dataset):
         mel_window  = self._mels[file_idx][:, start:end].copy()
         beat_window = self._beat_acts[file_idx][start:end].copy()
         tempo_bin   = self._tempo_bins[file_idx]
-
+        bpm         = self._bpms[file_idx]
+        # ── Pitch shift augmentation（僅 train，對 mel 做頻率軸平移）──
+        # pitch shift ±2 個 mel bin，beat timestamps 不變，tempo bin 不變
+        if self.split == 'train' and np.random.random() < 0.5:
+            shift = np.random.randint(-2, 3)  # -2, -1, 0, 1, 2
+            if shift > 0:
+                mel_window = np.concatenate([
+                    mel_window[shift:, :],
+                    np.full((shift, mel_window.shape[1]), mel_window.min())
+                ], axis=0)
+            elif shift < 0:
+                mel_window = np.concatenate([
+                    np.full((-shift, mel_window.shape[1]), mel_window.min()),
+                    mel_window[:shift, :]
+                ], axis=0)
         # 最後一個 window 可能不足 context_frames，補 0
         if mel_window.shape[1] < self.context_frames:
             pad = self.context_frames - mel_window.shape[1]
@@ -327,10 +359,15 @@ class BeatDataset(Dataset):
         mean, std  = mel_window.mean(), mel_window.std() + 1e-6
         mel_window = (mel_window - mean) / std
 
+        downbeat_window = self._downbeat_acts[file_idx][start:end].copy()
+        if downbeat_window.shape[0] < self.context_frames:
+            downbeat_window = np.pad(downbeat_window, (0, self.context_frames - downbeat_window.shape[0]))
+
         return (
-            torch.from_numpy(mel_window).unsqueeze(0).float(),  # (1, N_MELS, T)
-            torch.from_numpy(beat_window).float(),               # (T,)
-            torch.tensor(tempo_bin, dtype=torch.long),           # scalar
+            torch.from_numpy(mel_window).unsqueeze(0).float(),
+            torch.from_numpy(beat_window).float(),
+            torch.from_numpy(downbeat_window).float(),
+            torch.from_numpy(bpm_to_tempo_target(bpm)).float(),
         )
 
 
@@ -349,4 +386,4 @@ if __name__ == '__main__':
         ds = BeatDataset(data_root, split=split, cache_dir=cache_dir)
         mel, beat, tempo = ds[0]
         print(f"  {split:5s}  mel={tuple(mel.shape)}  beat={tuple(beat.shape)}  "
-              f"tempo_bin={tempo.item()}  windows={len(ds)}")
+              f"tempo_bin={tempo.argmax().item()}  windows={len(ds)}")

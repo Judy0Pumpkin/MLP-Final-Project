@@ -17,7 +17,7 @@ from constants import (
 from model import BeatTCN
 from train import peak_pick   # 複用 train.py 裡的 peak_pick（threshold=0.4, min_dist=5）
 
-CHECKPOINT = 'checkpoints/best_model.pt'
+CHECKPOINT = 'checkpoints/best_model_new_arch.pt'
 
 
 # ────────────────────────────────────────────────────────────
@@ -93,7 +93,13 @@ def estimate_bpm_autocorr(beat_act, min_bpm=40, max_bpm=250):
     # 自相關（只取正 lag 部分）
     n    = len(beat_act)
     corr = np.correlate(beat_act, beat_act, mode='full')[n - 1:]
-
+    # 對倍速/半速區域的 corr 做降權，避免 octave error
+    for lag in range(min_lag, max_lag + 1):
+        for other_lag in range(min_lag, lag):
+            if lag % other_lag == 0:
+                corr[lag] *= 0.5
+                break
+    
     # 在有效 BPM 範圍內找最大相關 lag
     best_lag = int(np.argmax(corr[min_lag:max_lag + 1])) + min_lag
     bpm      = 60.0 / (best_lag / fps)
