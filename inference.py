@@ -105,7 +105,14 @@ def estimate_bpm_autocorr(beat_act, min_bpm=40, max_bpm=250):
     bpm      = 60.0 / (best_lag / fps)
     return float(bpm)
 
+_bpm_history = []
 
+def smooth_bpm(bpm, window=5):
+    """用中位數平滑 BPM，避免單次異常值"""
+    _bpm_history.append(bpm)
+    if len(_bpm_history) > window:
+        _bpm_history.pop(0)
+    return float(np.median(_bpm_history))
 def run_beat_tcn(model, mel_tensor, device):
     """
     模型推理：mel tensor → beat 時間點 + 估計 BPM。
@@ -118,7 +125,7 @@ def run_beat_tcn(model, mel_tensor, device):
     """
     model.eval()
     with torch.no_grad():
-        beat_act_tensor, _ = model(mel_tensor.to(device))
+        beat_act_tensor, _, _ = model(mel_tensor.to(device))
 
     beat_act = beat_act_tensor.squeeze().cpu().numpy()  # (FIXED_FRAMES,)
 
