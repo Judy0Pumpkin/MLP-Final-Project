@@ -4,8 +4,8 @@ CHANNELS      = 1       # 單聲道
 CHUNK_SIZE    = 512     # 每次 callback 收到的樣本數
 
 # ── Sliding Window ────────────────────────────────────────
-WINDOW_SECONDS = 6                        # 每次送進模型的音訊長度（秒）
-WINDOW_SAMPLES = SAMPLE_RATE * WINDOW_SECONDS      # = 132300 samples
+WINDOW_SECONDS = 3# 每次送進模型的音訊長度（秒）
+WINDOW_SAMPLES = SAMPLE_RATE * WINDOW_SECONDS      # = 66150 samples
 HOP_SECONDS    = 0.5                      # 每隔多久滑動一次（秒），控制輸出頻率
 HOP_SAMPLES    = int(SAMPLE_RATE * HOP_SECONDS)    # = 11025 samples
 
