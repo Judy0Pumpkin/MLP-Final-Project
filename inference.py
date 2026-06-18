@@ -13,7 +13,9 @@ import sounddevice as sd
 from constants import (
     SAMPLE_RATE, N_MELS, HOP_LENGTH, N_FFT,
     F_MIN, F_MAX, FIXED_FRAMES, WINDOW_SECONDS,
+    TEMPO_MIN, TEMPO_MAX,
 )
+from dataset import N_TEMPO_BINS
 from model import BeatTCN
 from train import peak_pick   # 複用 train.py 裡的 peak_pick（threshold=0.4, min_dist=5）
 
@@ -105,38 +107,58 @@ def estimate_bpm_autocorr(beat_act, min_bpm=40, max_bpm=250):
     bpm      = 60.0 / (best_lag / fps)
     return float(bpm)
 
-_bpm_history = []
 
-def smooth_bpm(bpm, window=5):
-    """用中位數平滑 BPM，避免單次異常值"""
-    _bpm_history.append(bpm)
-    if len(_bpm_history) > window:
-        _bpm_history.pop(0)
-    return float(np.median(_bpm_history))
+_bpm_history: list = []
+
+def smooth_bpm(bpm, n=5):
+    """用最近 n 次的移動平均平滑 BPM，避免逐幀跳動。"""
+    global _bpm_history
+    if bpm is not None and bpm > 0:
+        _bpm_history.append(float(bpm))
+        if len(_bpm_history) > n:
+            _bpm_history.pop(0)
+    return float(np.mean(_bpm_history)) if _bpm_history else float(bpm or 0)
+
+
+def _bin_to_bpm(bin_idx):
+    """tempo bin index → BPM（log-spaced 逆映射）"""
+    ratio = bin_idx / (N_TEMPO_BINS - 1)
+    return float(TEMPO_MIN * (TEMPO_MAX / TEMPO_MIN) ** ratio)
+
+
 def run_beat_tcn(model, mel_tensor, device):
     """
-    模型推理：mel tensor → beat 時間點 + 估計 BPM。
-
+    模型推理：mel tensor → beat/downbeat 時間點 + BPM。
 
     回傳:
-        beat_times : np.array，beat 出現的時間（秒）
-        bpm        : float，自相關法估算的 BPM
-        beat_act   : np.array (FIXED_FRAMES,)，原始 activation 曲線（供視覺化）
+        beat_times     : np.array, beat 出現的時間（秒）
+        bpm            : float, 自相關法估算的 BPM
+        beat_act       : np.array (T,), beat activation 曲線
+        downbeat_times : np.array, downbeat 時間（秒）；v1 模型為空
+        tempo_bpm      : float, tempo head 輸出的 BPM；v1 模型為 0.0
     """
     model.eval()
     with torch.no_grad():
-        beat_act_tensor, _, _ = model(mel_tensor.to(device))
+        outputs = model(mel_tensor.to(device))
 
-    beat_act = beat_act_tensor.squeeze().cpu().numpy()  # (FIXED_FRAMES,)
+    beat_act = outputs[0].squeeze().cpu().numpy()
 
-    # Peak picking → beat 時間點
+    # v2 模型有 3 outputs：(beat_act, downbeat_act, tempo_logits)
+    if len(outputs) >= 3:
+        db_act         = outputs[1].squeeze().cpu().numpy()
+        tempo_logits   = outputs[2].squeeze().cpu().numpy()
+        db_frames      = peak_pick(db_act, threshold=0.3, min_dist=20)
+        downbeat_times = db_frames * HOP_LENGTH / SAMPLE_RATE
+        tempo_bpm      = _bin_to_bpm(int(np.argmax(tempo_logits)))
+    else:
+        downbeat_times = np.array([], dtype=np.float32)
+        tempo_bpm      = 0.0
+
     beat_frames = peak_pick(beat_act)
     beat_times  = beat_frames * HOP_LENGTH / SAMPLE_RATE
+    bpm         = estimate_bpm_autocorr(beat_act)
 
-    # 自相關法估算 BPM（不依賴 peak picking）
-    bpm = estimate_bpm_autocorr(beat_act)
-
-    return beat_times, bpm, beat_act
+    return beat_times, bpm, beat_act, downbeat_times, tempo_bpm
 
 
 # ────────────────────────────────────────────────────────────
