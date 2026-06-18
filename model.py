@@ -124,11 +124,10 @@ if __name__ == '__main__':
     x    = torch.randn(B, 1, N_MELS, T)
     model = BeatTCN()
 
-    beat, downbeat, tempo = model(x)
+    beat, tempo = model(x)
     print(f"Input        : {tuple(x.shape)}")
-    print(f"beat_act     : {tuple(beat.shape)}      (expected ({B}, {T}))")
-    print(f"downbeat_act : {tuple(downbeat.shape)}  (expected ({B}, {T}))")
-    print(f"tempo_logits : {tuple(tempo.shape)}     (expected ({B}, {N_TEMPO_BINS}))")
+    print(f"beat_act     : {tuple(beat.shape)}   (expected ({B}, {T}))")
+    print(f"tempo_logits : {tuple(tempo.shape)}  (expected ({B}, {N_TEMPO_BINS}))")
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Parameters   : {n_params:,}")
