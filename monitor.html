@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BeatTCN Live Monitor</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: 'Courier New', monospace;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Header ── */
+header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+header h1 { font-size: 14px; color: #58a6ff; font-weight: bold; letter-spacing: 1px; }
+.pill {
+  padding: 2px 9px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: bold;
+}
+.pill-green { background: #1a3626; color: #3fb950; border: 1px solid #238636; }
+.pill-gray  { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
+.pill-red   { background: #3d1f1f; color: #f47067; border: 1px solid #6e2121; }
+
+#btn-toggle {
+  margin-left: auto;
+  padding: 5px 18px;
+  border-radius: 6px;
+  border: 1px solid #30363d;
+  background: #21262d;
+  color: #e6edf3;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+#btn-toggle:hover { background: #30363d; }
+#btn-toggle.active { background: #1a3626; border-color: #238636; color: #3fb950; }
+
+/* ── Main layout ── */
+.main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── Left BPM panel ── */
+.bpm-panel {
+  width: 260px;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 20px;
+  border-right: 1px solid #30363d;
+  gap: 12px;
+}
+
+/* model selector */
+#model-select {
+  padding: 4px 8px;
+  background: #21262d;
+  color: #e6edf3;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* beat orb — flash driven by JS, no CSS loop */
+@keyframes orbFlash {
+  0%   { background: radial-gradient(circle at 35% 35%, #7ec8ff, #2080d0);
+         box-shadow: 0 0 0 0 rgba(88,166,255,0.9); }
+  40%  { box-shadow: 0 0 0 16px rgba(88,166,255,0); }
+  100% { background: radial-gradient(circle at 35% 35%, #1f6fbf, #0d2d52);
+         box-shadow: 0 0 0 0 rgba(88,166,255,0); }
+}
+#beat-orb {
+  width: 88px; height: 88px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #1f6fbf, #0d2d52);
+  border: 2px solid #58a6ff;
+  display: flex; align-items: center; justify-content: center;
+  cursor: default;
+}
+#beat-orb.flash { animation: orbFlash 0.25s ease-out forwards; }
+#beat-orb span { font-size: 11px; color: #58a6ff88; letter-spacing: 2px; }
+
+#bpm-display {
+  text-align: center;
+  line-height: 1;
+}
+#bpm-value {
+  font-size: 72px;
+  font-weight: bold;
+  color: #58a6ff;
+  font-variant-numeric: tabular-nums;
+}
+#bpm-label { font-size: 11px; color: #8b949e; margin-top: 3px; letter-spacing: 1px; }
+
+/* info cards grid */
+.cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  width: 100%;
+}
+.card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 7px;
+  padding: 7px 10px;
+  text-align: center;
+}
+.card .cv { font-size: 18px; font-weight: bold; color: #7ee787; font-variant-numeric: tabular-nums; }
+.card .cl { font-size: 9px; color: #8b949e; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+/* downbeat indicator */
+#downbeat-bar {
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid #30363d;
+  text-align: center;
+  font-size: 12px;
+  color: #8b949e;
+  transition: all 0.15s;
+  letter-spacing: 1px;
+}
+#downbeat-bar.lit {
+  background: rgba(255,165,0,0.12);
+  border-color: #ffa500;
+  color: #ffa500;
+}
+
+/* ── Right graph panel ── */
+.graph-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  gap: 12px;
+  overflow: hidden;
+}
+.graph-block {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.graph-title {
+  font-size: 10px;
+  color: #8b949e;
+  margin-bottom: 5px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+}
+canvas {
+  flex: 1;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  display: block;
+}
+
+/* ── Footer ── */
+footer {
+  padding: 6px 20px;
+  font-size: 10px;
+  color: #8b949e;
+  background: #161b22;
+  border-top: 1px solid #30363d;
+  display: flex;
+  gap: 24px;
+  flex-shrink: 0;
+}
+
+/* ── Silence overlay ── */
+#silence-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(13,17,23,0.75);
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: #8b949e;
+  letter-spacing: 2px;
+}
+</style>
+</head>
+<body>
+
+<div id="silence-overlay">SILENCE — waiting for audio...</div>
+
+<header>
+  <h1>BeatTCN Monitor</h1>
+  <span id="pill-live"  class="pill pill-gray">⬤ IDLE</span>
+  <span id="pill-loop"  class="pill pill-gray">Loop 0</span>
+  <select id="model-select" onchange="setModel(this.value)"></select>
+  <button id="btn-toggle" onclick="toggleStreaming()">▶ Start</button>
+</header>
+
+<div class="main">
+
+  <!-- Left: BPM + stats -->
+  <div class="bpm-panel">
+    <div id="beat-orb"><span>BEAT</span></div>
+
+    <div id="bpm-display">
+      <div id="bpm-value">--</div>
+      <div id="bpm-label">BPM (autocorr)</div>
+    </div>
+
+    <div class="cards">
+      <div class="card"><div class="cv" id="cv-beats">0</div><div class="cl">Beats</div></div>
+      <div class="card"><div class="cv" id="cv-db">0</div><div class="cl">Downbeats</div></div>
+      <div class="card"><div class="cv" id="cv-tempo">–</div><div class="cl">Tempo Head</div></div>
+      <div class="card"><div class="cv" id="cv-amp">0.000</div><div class="cl">Amp Max</div></div>
+    </div>
+
+    <div id="downbeat-bar">— no downbeat —</div>
+  </div>
+
+  <!-- Right: graphs -->
+  <div class="graph-panel">
+    <div class="graph-block">
+      <div class="graph-title">Beat Activation &amp; Markers</div>
+      <canvas id="c-beat"></canvas>
+    </div>
+    <div class="graph-block">
+      <div class="graph-title">Waveform</div>
+      <canvas id="c-wave"></canvas>
+    </div>
+  </div>
+
+</div>
+
+<footer>
+  <span id="f-window">Window: 6 s</span>
+  <span id="f-sr">SR: 22050</span>
+  <span id="f-buffer">Buffer: 0%</span>
+  <span id="f-amp-mean">Mean amp: 0</span>
+</footer>
+
+<script>
+const API = 'http://127.0.0.1:5050';
+let lastLoop        = -1;
+let dbTimer         = null;
+let _scheduledFlash = [];   // scheduled beat flash timeoutIds
+let _flashTimer     = null; // orb flash clear timer
+let _knownModels    = [];   // last known available_models list
+
+// ── Canvas setup ────────────────────────────────────────
+const cBeat = document.getElementById('c-beat');
+const cWave = document.getElementById('c-wave');
+const ctxB  = cBeat.getContext('2d');
+const ctxW  = cWave.getContext('2d');
+
+function resizeAll() {
+  [cBeat, cWave].forEach(c => {
+    c.width  = c.offsetWidth;
+    c.height = c.offsetHeight;
+  });
+}
+window.addEventListener('resize', resizeAll);
+setTimeout(resizeAll, 80);
+
+// ── Draw beat activation ─────────────────────────────────
+function drawBeatAct(act, beatTimes, dbTimes, winSec) {
+  const W = cBeat.width, H = cBeat.height;
+  ctxB.clearRect(0, 0, W, H);
+
+  // grid line at 0.5
+  ctxB.strokeStyle = '#21262d';
+  ctxB.lineWidth = 1;
+  ctxB.beginPath();
+  ctxB.moveTo(0, H * 0.5); ctxB.lineTo(W, H * 0.5);
+  ctxB.stroke();
+
+  // beat time markers (blue verticals)
+  if (beatTimes && beatTimes.length) {
+    ctxB.strokeStyle = '#58a6ff55';
+    ctxB.lineWidth = 1;
+    beatTimes.forEach(t => {
+      const x = (t / winSec) * W;
+      ctxB.beginPath(); ctxB.moveTo(x, 0); ctxB.lineTo(x, H); ctxB.stroke();
+    });
+  }
+
+  // downbeat markers (orange, thicker)
+  if (dbTimes && dbTimes.length) {
+    ctxB.strokeStyle = '#ffa500cc';
+    ctxB.lineWidth = 2;
+    dbTimes.forEach(t => {
+      const x = (t / winSec) * W;
+      ctxB.beginPath(); ctxB.moveTo(x, 0); ctxB.lineTo(x, H); ctxB.stroke();
+    });
+  }
+
+  if (!act || !act.length) return;
+
+  // filled curve
+  ctxB.strokeStyle = '#58a6ff';
+  ctxB.lineWidth = 1.5;
+  ctxB.beginPath();
+  act.forEach((v, i) => {
+    const x = (i / (act.length - 1)) * W;
+    const y = H - v * H;
+    i === 0 ? ctxB.moveTo(x, y) : ctxB.lineTo(x, y);
+  });
+  ctxB.stroke();
+  ctxB.lineTo(W, H); ctxB.lineTo(0, H); ctxB.closePath();
+  ctxB.fillStyle = '#58a6ff18';
+  ctxB.fill();
+}
+
+// ── Draw waveform ────────────────────────────────────────
+function drawWave(data) {
+  const W = cWave.width, H = cWave.height;
+  ctxW.clearRect(0, 0, W, H);
+
+  ctxW.strokeStyle = '#21262d';
+  ctxW.lineWidth = 1;
+  ctxW.beginPath();
+  ctxW.moveTo(0, H / 2); ctxW.lineTo(W, H / 2);
+  ctxW.stroke();
+
+  if (!data || !data.length) return;
+
+  ctxW.strokeStyle = '#7ee787';
+  ctxW.lineWidth = 1;
+  ctxW.beginPath();
+  data.forEach((v, i) => {
+    const x = (i / (data.length - 1)) * W;
+    const y = H / 2 - v * (H / 2) * 0.9;
+    i === 0 ? ctxW.moveTo(x, y) : ctxW.lineTo(x, y);
+  });
+  ctxW.stroke();
+}
+
+// ── Beat orb flash (called on each scheduled beat) ──────
+function flashBeat() {
+  const orb = document.getElementById('beat-orb');
+  orb.classList.remove('flash');
+  void orb.offsetWidth;
+  orb.classList.add('flash');
+  if (_flashTimer) clearTimeout(_flashTimer);
+  _flashTimer = setTimeout(() => orb.classList.remove('flash'), 300);
+}
+
+// ── Schedule future beat flashes from last detected beat ─
+function scheduleBeatFlashes(beatTimes, bpm, windowSec) {
+  _scheduledFlash.forEach(id => clearTimeout(id));
+  _scheduledFlash = [];
+  if (!beatTimes || !beatTimes.length || !bpm || bpm <= 0) return;
+  const intervalMs    = 60000 / bpm;
+  const lastBeat      = beatTimes[beatTimes.length - 1];
+  const timeSinceLast = (windowSec - lastBeat) * 1000;
+  const timeToNext    = intervalMs - (timeSinceLast % intervalMs);
+  for (let i = 0; i < Math.ceil(8000 / intervalMs) + 1; i++) {
+    const delay = timeToNext + i * intervalMs;
+    if (delay > 0 && delay < 9000)
+      _scheduledFlash.push(setTimeout(flashBeat, delay));
+  }
+}
+
+// ── Model selector ───────────────────────────────────────
+function updateModelSelect(available, selected) {
+  if (JSON.stringify(available) === JSON.stringify(_knownModels)) return;
+  _knownModels = available.slice();
+  const sel = document.getElementById('model-select');
+  sel.innerHTML = '';
+  available.forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m;
+    opt.textContent = m === 'v1' ? 'BeatTCN v1' : m === 'v2' ? 'BeatTCN v2' : 'Librosa';
+    if (m === selected) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+async function setModel(name) {
+  try {
+    await fetch(API + '/set_model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: name }),
+    });
+  } catch (_) {}
+}
+
+// ── Downbeat flash ───────────────────────────────────────
+function flashDownbeat(count) {
+  const el = document.getElementById('downbeat-bar');
+  el.textContent = `↓  DOWNBEAT  ×${count}`;
+  el.classList.add('lit');
+  if (dbTimer) clearTimeout(dbTimer);
+  dbTimer = setTimeout(() => {
+    el.textContent = '— no downbeat —';
+    el.classList.remove('lit');
+  }, 1800);
+}
+
+// ── Update UI from state ─────────────────────────────────
+function updateUI(s) {
+  // header pills
+  const live = document.getElementById('pill-live');
+  if (s.streaming) {
+    live.textContent = '⬤ LIVE';
+    live.className = 'pill pill-green';
+    document.getElementById('btn-toggle').textContent = '■ Stop';
+    document.getElementById('btn-toggle').classList.add('active');
+  } else {
+    live.textContent = s.is_live ? '⬤ PAUSED' : '⬤ IDLE';
+    live.className = 'pill pill-gray';
+    document.getElementById('btn-toggle').textContent = '▶ Start';
+    document.getElementById('btn-toggle').classList.remove('active');
+  }
+  document.getElementById('pill-loop').textContent = 'Loop ' + (s.loop || 0);
+
+  // model selector
+  if (s.available_models) updateModelSelect(s.available_models, s.selected_model);
+
+  // BPM display
+  if (s.bpm && s.bpm > 0) {
+    document.getElementById('bpm-value').textContent = s.bpm.toFixed(1);
+  } else {
+    document.getElementById('bpm-value').textContent = '--';
+  }
+
+  // info cards
+  document.getElementById('cv-beats').textContent =
+    s.beat_count != null ? s.beat_count : 0;
+  document.getElementById('cv-db').textContent =
+    s.downbeat_times ? s.downbeat_times.length : 0;
+  document.getElementById('cv-tempo').textContent =
+    s.tempo_bpm ? s.tempo_bpm.toFixed(1) : '–';
+  document.getElementById('cv-amp').textContent =
+    s.amplitude_max != null ? s.amplitude_max.toFixed(3) : '0.000';
+
+  // silence overlay
+  const silEl = document.getElementById('silence-overlay');
+  silEl.style.display = s.silent ? 'flex' : 'none';
+
+  // new inference → schedule beat flashes + downbeat flash
+  if (s.loop !== lastLoop) {
+    lastLoop = s.loop;
+    scheduleBeatFlashes(s.beat_times, s.bpm, s.window_seconds || 6);
+    if (s.downbeat_times && s.downbeat_times.length > 0)
+      flashDownbeat(s.downbeat_times.length);
+  }
+
+  // footer
+  document.getElementById('f-buffer').textContent =
+    'Buffer: ' + Math.round((s.buffer_fill || 0) * 100) + '%';
+  document.getElementById('f-amp-mean').textContent =
+    'Mean amp: ' + (s.amplitude_mean || 0).toFixed(5);
+  if (s.window_seconds)
+    document.getElementById('f-window').textContent = 'Window: ' + s.window_seconds + ' s';
+  if (s.sample_rate)
+    document.getElementById('f-sr').textContent = 'SR: ' + s.sample_rate;
+
+  // graphs
+  drawBeatAct(s.beat_act, s.beat_times, s.downbeat_times, s.window_seconds || 6);
+  drawWave(s.waveform);
+}
+
+// ── Polling ──────────────────────────────────────────────
+async function poll() {
+  try {
+    const r = await fetch(API + '/state', { signal: AbortSignal.timeout(1000) });
+    updateUI(await r.json());
+  } catch (_) {}
+  setTimeout(poll, 200);
+}
+
+async function toggleStreaming() {
+  try { await fetch(API + '/toggle', { method: 'POST' }); }
+  catch (_) {}
+}
+
+poll();
+</script>
+</body>
+</html>
